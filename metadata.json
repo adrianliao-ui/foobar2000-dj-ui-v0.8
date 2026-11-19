@@ -1,0 +1,8 @@
+{
+  "name": "foobar2000-dj-ui beta v. 0.5",
+  "description": "Imported from GitHub: adrianliao-ui/foobar2000-dj-ui",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

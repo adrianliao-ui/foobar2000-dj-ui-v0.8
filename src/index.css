@@ -1,0 +1,466 @@
+@import "tailwindcss";
+
+/* 徹底移除 React Flow 預設節點 (.react-flow__node-default) 的白色背景、邊框、內距與 150px 寬度限制 */
+.react-flow {
+    --xy-node-background-color: transparent !important;
+    --xy-node-background-color-default: transparent !important;
+    --xy-node-border: none !important;
+    --xy-node-border-default: none !important;
+    --xy-node-boxshadow-selected: none !important;
+    --xy-node-boxshadow-hover: none !important;
+}
+
+.react-flow__node,
+.react-flow__node-default,
+.react-flow__node-albumNode {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    width: auto !important;
+    box-shadow: none !important;
+}
+
+/* 造成原錯誤的原因：React Flow 會直接在 .react-flow__node 寫入行內 z-index (0 或選取時 1000)，導致節點內彈出的外部連線過渡設定視窗被右側其他卡片遮擋。
+   本次修改的目的：透過原生 CSS !important 強制將包含 .dj-edge-transition-popover 的節點提升至 z-index: 2000，確保過渡設定視窗位於所有節點卡片上層。 */
+.react-flow__node:has(.dj-edge-transition-popover) {
+    z-index: 2000 !important;
+}
+
+/* ============================================================================
+   [主題方案 1] Material 3 深色主題 (m3-dark)
+   基於 Google Material You Dark Tonal Surface 階層、24px 大圓角面板與 Tonal 膠囊按鈕
+   ============================================================================ */
+[data-theme="m3-dark"] .dj-app-root {
+    background-color: #0f131a !important;
+    color: #e2e7f2 !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-header,
+[data-theme="m3-dark"] .dj-surface-panel {
+    background-color: #191e29 !important;
+    border-color: rgba(168, 199, 250, 0.14) !important;
+    border-radius: 22px !important;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+/* M3 次級內部容器 (Surface Container High / Low) */
+[data-theme="m3-dark"] .dj-surface-panel .bg-slate-950,
+[data-theme="m3-dark"] .dj-surface-panel .bg-slate-950\/80,
+[data-theme="m3-dark"] .dj-surface-panel .bg-slate-950\/70,
+[data-theme="m3-dark"] .dj-surface-header .bg-slate-950 {
+    background-color: #121620 !important;
+    border-color: rgba(168, 199, 250, 0.12) !important;
+    border-radius: 16px !important;
+}
+
+/* M3 膠囊與圓角按鈕風格 (Filled Tonal & Outlined Pill Buttons) */
+[data-theme="m3-dark"] .dj-surface-header button,
+[data-theme="m3-dark"] .dj-surface-panel button {
+    border-radius: 9999px !important;
+    letter-spacing: 0.01em;
+    transition: background-color 160ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 160ms cubic-bezier(0.2, 0, 0, 1),
+                transform 120ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* 保持主題偏好選單內的大卡片與播放佇列長列表按鈕為 M3 圓角卡片，不強制變為細長膠囊 */
+[data-theme="m3-dark"] .theme-popover-surface button {
+    border-radius: 16px !important;
+}
+
+/* M3 標準深色次級按鈕 (Tonal Neutral Container) */
+[data-theme="m3-dark"] .dj-surface-header button.bg-slate-800,
+[data-theme="m3-dark"] .dj-surface-panel button.bg-slate-800 {
+    background-color: #252c3d !important;
+    border-color: rgba(168, 199, 250, 0.16) !important;
+    color: #dbe3f4 !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-header button.bg-slate-800:hover:not(:disabled),
+[data-theme="m3-dark"] .dj-surface-panel button.bg-slate-800:hover:not(:disabled) {
+    background-color: #313b52 !important;
+    border-color: rgba(168, 199, 250, 0.35) !important;
+}
+
+/* M3 Primary Tonal 強調按鈕 (播放鍵、主操作鍵) */
+[data-theme="m3-dark"] .dj-surface-panel button.bg-cyan-600,
+[data-theme="m3-dark"] .dj-surface-header button.bg-cyan-600\/90 {
+    background-color: #8ab4f8 !important;
+    border-color: #a8c7fa !important;
+    color: #081c36 !important;
+    box-shadow: 0 4px 14px rgba(138, 180, 248, 0.28) !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-panel button.bg-cyan-600:hover:not(:disabled) {
+    background-color: #a8c7fa !important;
+}
+
+/* M3 Secondary / Tertiary Tonal 容器按鈕 */
+[data-theme="m3-dark"] .dj-surface-header button.bg-emerald-950\/80,
+[data-theme="m3-dark"] .dj-surface-panel button.bg-emerald-950\/70,
+[data-theme="m3-dark"] .dj-surface-panel button.bg-emerald-600 {
+    background-color: #1f3a3d !important;
+    border-color: rgba(128, 203, 196, 0.35) !important;
+    color: #a7f3d0 !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-panel button.bg-cyan-950\/60,
+[data-theme="m3-dark"] .dj-surface-header button.bg-cyan-950\/90 {
+    background-color: #1e2f4d !important;
+    border-color: rgba(168, 199, 250, 0.36) !important;
+    color: #c2dbff !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-panel button.bg-violet-950\/60,
+[data-theme="m3-dark"] .dj-surface-header button.bg-indigo-950\/90 {
+    background-color: #2d2647 !important;
+    border-color: rgba(208, 188, 255, 0.34) !important;
+    color: #e9ddff !important;
+}
+
+/* M3 下拉選單與搜尋輸入框膠囊圓潤化 */
+[data-theme="m3-dark"] .dj-surface-panel select,
+[data-theme="m3-dark"] .dj-surface-panel input[type="text"] {
+    background-color: #1c2230 !important;
+    border-color: rgba(168, 199, 250, 0.24) !important;
+    border-radius: 9999px !important;
+    line-height: 1.4 !important;
+}
+
+[data-theme="m3-dark"] .dj-surface-panel input[type="range"] {
+    accent-color: #8ab4f8 !important;
+}
+
+/* ============================================================================
+   [主題方案 2] 北歐晨光 • 燕麥奶雲母淺色主題 (m3-cafe-mica)
+   繼承 Material 3 面板與膠囊按鈕設計 + 淺色燕麥奶 Mica 雲母半透明漫射材質 + Segoe UI Variable 字體
+   色彩主題：北歐燕麥奶 (#F5EFE8)、柔霧杏仁白 (#FFFDF9)、焦糖肉桂拿鐵 (#C87D4B)、鼠尾草抹茶 (#4E8763)、濃縮深褐字 (#2B1E17)
+   ============================================================================ */
+[data-theme="m3-cafe-mica"],
+[data-theme="m3-cafe-mica"] .dj-app-root {
+    font-family: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif !important;
+    color: #2b1e17 !important;
+}
+
+/* Mica 雲母漫射淺色背景：模擬北歐晨光灑入淺木質與燕麥奶咖啡館的多層次暖陽環境光暈 */
+[data-theme="m3-cafe-mica"] .dj-app-root {
+    background-color: #f4ede4 !important;
+    background-image:
+        radial-gradient(circle at 12% 16%, rgba(244, 194, 149, 0.42) 0%, transparent 46%),
+        radial-gradient(circle at 88% 14%, rgba(235, 176, 142, 0.34) 0%, transparent 44%),
+        radial-gradient(circle at 80% 84%, rgba(156, 201, 168, 0.36) 0%, transparent 48%),
+        radial-gradient(circle at 24% 82%, rgba(230, 188, 148, 0.35) 0%, transparent 46%),
+        linear-gradient(135deg, #f8f3ec 0%, #efe5d8 52%, #f5efe7 100%) !important;
+}
+
+/* Mica 半透明毛玻璃主面板 (Header / 左右側欄 / 中央畫布外框 / 底部時間軸) */
+[data-theme="m3-cafe-mica"] .dj-surface-header,
+[data-theme="m3-cafe-mica"] .dj-surface-panel {
+    background-color: rgba(255, 251, 246, 0.74) !important;
+    backdrop-filter: blur(28px) saturate(145%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(145%) !important;
+    border-color: rgba(196, 152, 116, 0.34) !important;
+    border-radius: 22px !important;
+    box-shadow:
+        0 10px 30px rgba(92, 62, 42, 0.10),
+        inset 0 1px 0 rgba(255, 255, 255, 0.85) !important;
+}
+
+/* Mica 次級內部半透明容器 (搜尋欄底框、佇列摘要卡、音量控制底框、過渡設定框、波形框等) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/95,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/85,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/75,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/70,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-950\/60,
+[data-theme="m3-cafe-mica"] .dj-surface-header .bg-slate-950,
+[data-theme="m3-cafe-mica"] .dj-surface-header .bg-slate-950\/95 {
+    background-color: rgba(244, 234, 222, 0.82) !important;
+    backdrop-filter: blur(16px) !important;
+    border-color: rgba(196, 152, 116, 0.32) !important;
+    border-radius: 16px !important;
+}
+
+/* 面板內部次級卡片、輸入外框、LRC 歌詞列、VU 電平底槽與移除按鈕 (.bg-slate-900 系列) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900\/95,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900\/70,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .bg-slate-900\/60,
+[data-theme="m3-cafe-mica"] .dj-surface-header .bg-slate-900,
+[data-theme="m3-cafe-mica"] .dj-surface-header .bg-slate-900\/95 {
+    background-color: rgba(255, 251, 246, 0.88) !important;
+    border-color: rgba(196, 152, 116, 0.36) !important;
+    color: #3b281e !important;
+}
+
+/* 面板內非按鈕之 bg-slate-800 徽章 (例如播放佇列計數圓點、色輪關閉鈕等) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel span.bg-slate-800,
+[data-theme="m3-cafe-mica"] .dj-surface-header span.bg-slate-800 {
+    background-color: rgba(230, 212, 194, 0.92) !important;
+    color: #3b281e !important;
+}
+
+/* 面板內深色邊框統一轉為暖杏拿鐵細邊框 */
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-800,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-800\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-800\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-700,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-700\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .border-slate-700\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-header .border-slate-800,
+[data-theme="m3-cafe-mica"] .dj-surface-header .border-slate-700 {
+    border-color: rgba(196, 152, 116, 0.34) !important;
+}
+
+/* 淺色雲母主題下，自動將原本針對深色背景設計的淺灰白字反轉為深焙咖啡與摩卡色階，確保高對比清晰度 */
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-slate-100,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-100,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .text-slate-100 {
+    color: #2b1e17 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-slate-200,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-200,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-slate-300,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-300,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .text-slate-300 {
+    color: #463227 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-slate-400,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-400,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-500,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-slate-600,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-slate-700,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .text-slate-400 {
+    color: #785d4d !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-cyan-400,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-cyan-400,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-cyan-300,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-cyan-200,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-cyan-300,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .text-cyan-300,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .text-cyan-300\/90 {
+    color: #9e5020 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-emerald-400,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-emerald-300,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-emerald-300 {
+    color: #2d6340 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-indigo-300,
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-indigo-200,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-indigo-200 {
+    color: #5c2833 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-amber-300,
+[data-theme="m3-cafe-mica"] .dj-surface-header .text-amber-300 {
+    color: #8c461c !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel .text-rose-300 {
+    color: #9e2a3b !important;
+}
+
+/* M3 圓潤膠囊按鈕規範 */
+[data-theme="m3-cafe-mica"] .dj-surface-header button,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button {
+    border-radius: 9999px !important;
+    letter-spacing: 0.01em;
+    transition: background-color 160ms cubic-bezier(0.2, 0, 0, 1),
+                border-color 160ms cubic-bezier(0.2, 0, 0, 1),
+                transform 120ms cubic-bezier(0.2, 0, 0, 1),
+                box-shadow 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* 偏好設定浮動視窗淺色雲母化 */
+[data-theme="m3-cafe-mica"] .theme-popover-surface {
+    background-color: rgba(255, 250, 244, 0.95) !important;
+    backdrop-filter: blur(30px) saturate(150%) !important;
+    border-color: rgba(196, 152, 116, 0.45) !important;
+    box-shadow: 0 20px 48px rgba(74, 48, 32, 0.22) !important;
+}
+
+[data-theme="m3-cafe-mica"] .theme-popover-surface button {
+    border-radius: 16px !important;
+}
+
+[data-theme="m3-cafe-mica"] .theme-popover-surface .bg-slate-950\/75,
+[data-theme="m3-cafe-mica"] .theme-popover-surface .bg-slate-900\/90 {
+    background-color: rgba(246, 236, 225, 0.9) !important;
+    border-color: rgba(196, 152, 116, 0.35) !important;
+}
+
+[data-theme="m3-cafe-mica"] .theme-popover-surface .bg-cyan-950\/45 {
+    background-color: rgba(244, 219, 196, 0.94) !important;
+    border-color: #c87d4b !important;
+}
+
+/* 下午茶淺色次級按鈕 (燕麥拿鐵 Tonal Neutral Button，涵蓋 Header 記憶槽 S2/S3 等 bg-slate-900 按鈕) */
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-slate-800,
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-slate-900,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-slate-800,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-slate-900,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-slate-900\/90 {
+    background-color: rgba(238, 224, 210, 0.9) !important;
+    border-color: rgba(186, 140, 104, 0.38) !important;
+    color: #3b281e !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-slate-800:hover:not(:disabled),
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-slate-900:hover:not(:disabled),
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-slate-800:hover:not(:disabled),
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-slate-900:hover:not(:disabled) {
+    background-color: rgba(226, 205, 184, 0.96) !important;
+    border-color: rgba(176, 118, 76, 0.58) !important;
+    color: #24160e !important;
+}
+
+/* 下午茶 Primary 主按鈕 (焦糖肉桂拿鐵 Filled Button) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-cyan-600,
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-cyan-600\/90 {
+    background-color: #c87d4b !important;
+    border-color: #b56b3a !important;
+    color: #fffaf5 !important;
+    box-shadow: 0 4px 12px rgba(200, 125, 75, 0.28) !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-cyan-600:hover:not(:disabled) {
+    background-color: #b56b3a !important;
+}
+
+/* 下午茶 Secondary 容器與按鈕 (鼠尾草抹茶歐蕾 Tonal) */
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-emerald-950\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-emerald-950\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-emerald-950\/70,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-emerald-950\/90 {
+    background-color: rgba(214, 236, 220, 0.92) !important;
+    border-color: rgba(78, 135, 99, 0.45) !important;
+    color: #1c472c !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-emerald-600 {
+    background-color: #4e8763 !important;
+    border-color: #3f7352 !important;
+    color: #ffffff !important;
+}
+
+/* 下午茶 Tertiary 容器與按鈕 (烤杏仁 / 焦糖瑪奇朵 / 玫瑰伯爵茶 Tonal) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-cyan-950\/60,
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-cyan-950\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-cyan-950\/80,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-amber-950\/70,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-amber-950\/80 {
+    background-color: rgba(245, 222, 201, 0.92) !important;
+    border-color: rgba(200, 125, 75, 0.48) !important;
+    color: #6e3815 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-violet-950\/60,
+[data-theme="m3-cafe-mica"] .dj-surface-header button.bg-indigo-950\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-indigo-950\/90,
+[data-theme="m3-cafe-mica"] .dj-surface-panel span.bg-indigo-950\/70 {
+    background-color: rgba(238, 218, 222, 0.92) !important;
+    border-color: rgba(176, 112, 124, 0.45) !important;
+    color: #5c2833 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-rose-950\/70,
+[data-theme="m3-cafe-mica"] .dj-surface-panel button.bg-rose-950\/80 {
+    background-color: rgba(248, 218, 220, 0.92) !important;
+    border-color: rgba(205, 96, 108, 0.48) !important;
+    color: #881d2a !important;
+}
+
+/* 下午茶淺色輸入框、下拉選單與滑桿 (補齊 leading-normal 防止搜尋框文字裁切) */
+[data-theme="m3-cafe-mica"] .dj-surface-panel select,
+[data-theme="m3-cafe-mica"] .dj-surface-panel input[type="text"] {
+    background-color: rgba(255, 252, 248, 0.94) !important;
+    border-color: rgba(196, 152, 116, 0.42) !important;
+    border-radius: 9999px !important;
+    color: #2b1e17 !important;
+    line-height: 1.4 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel input[type="text"]::placeholder,
+[data-theme="m3-cafe-mica"] .dj-surface-panel input[type="number"]::placeholder {
+    color: #9c8270 !important;
+}
+
+[data-theme="m3-cafe-mica"] .dj-surface-panel input[type="range"] {
+    accent-color: #c87d4b !important;
+}
+
+/* ============================================================================
+   [主題方案 4] 純黑舞台高對比 (amoled-stage)
+   專為低光源 Live 演出打造的 #040507 零眩光純黑背景與高對比邊框
+   ============================================================================ */
+[data-theme="amoled-stage"] .dj-app-root {
+    background-color: #030406 !important;
+}
+
+[data-theme="amoled-stage"] .dj-surface-header,
+[data-theme="amoled-stage"] .dj-surface-panel {
+    background-color: #090b10 !important;
+    border-color: #1e2638 !important;
+    border-radius: 10px !important;
+}
+
+[data-theme="amoled-stage"] .dj-surface-panel .bg-slate-950 {
+    background-color: #040508 !important;
+    border-color: #1a2234 !important;
+}
+
+/* ============================================================================
+   [播放中光暈呼吸動畫] 大幅強化專輯封面與旋轉小 CD 在播放中的呼吸起伏視覺體驗
+   ============================================================================ */
+@keyframes dj-glow-halo-breathe {
+    0%, 100% {
+        transform: scale(0.86);
+        opacity: 0.72;
+        filter: brightness(0.92) saturate(1.05);
+    }
+    50% {
+        transform: scale(1.24);
+        opacity: 1;
+        filter: brightness(1.38) saturate(1.35);
+    }
+}
+
+@keyframes dj-glow-frame-breathe {
+    0%, 100% {
+        filter: brightness(0.95) drop-shadow(0 0 2px rgba(255, 255, 255, 0.05));
+    }
+    50% {
+        filter: brightness(1.18) drop-shadow(0 0 12px var(--dj-breathe-color, #06b6d4));
+    }
+}
+
+/* 造成原錯誤的原因：原呼吸動畫週期僅 2.4s 導致光暈閃動節奏過快，且 .dj-glow-breathe-frame 單獨定義 animation 屬性覆蓋了小 CD 的 Tailwind spin 旋轉動畫。
+   本次修改的目的：將呼吸週期放慢為 4.8s 舒緩節奏，並新增 .dj-cd-spin-and-breathe 複合動畫類別同時執行 8s 線性旋轉與 4.8s 光暈呼吸。 */
+.dj-glow-breathe-halo {
+    animation: dj-glow-halo-breathe 4.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.dj-glow-breathe-frame {
+    animation: dj-glow-frame-breathe 4.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.dj-cd-spin-and-breathe {
+    animation:
+        spin 8s linear infinite,
+        dj-glow-frame-breathe 4.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+
