@@ -118,9 +118,14 @@ export default function App() {
     // [生命週期 1b] 視窗最小化與還原對時保護：
     // 1. 視窗最小化/隱藏前，立即保存最新播放位置 (masterTimeSeconds / trackTimeSeconds)
     // 2. 視窗開啟/還原時，立即向 foobar2000 C++ 宿主查詢真實背景播放秒數並校準 seekhead
+    // 造成原錯誤的原因：先前將 playlist 與 allTracks 列入此 useEffect 依賴陣列，導致播放中每次編輯畫布（如抽離/移除曲目 B）改變 playlist 時，
+    // 都會立即觸發 syncMasterTimelineWithHostPosition，並拿宿主尚未重寫的舊播放清單列索引覆蓋前端剛重算好的時間軸位置。
+    // 本次修改的目的：改透過 getState() 讀取最新佇列，僅在初次啟動與視窗從最小化/背景恢復焦點時向宿主對時。
     useEffect(() => {
-        if (playlist.length > 0) {
-            void syncMasterTimelineWithHostPosition(playlist, allTracks);
+        const initialQueue = useWorkflowStore.getState().playlist;
+        const initialLib = usePlaylistStore.getState().allTracks;
+        if (initialQueue.length > 0) {
+            void syncMasterTimelineWithHostPosition(initialQueue, initialLib);
         }
 
         let lastRestoreSyncAtMs = 0;
@@ -176,12 +181,7 @@ export default function App() {
             window.removeEventListener('pagehide', handleBeforeUnload);
             window.removeEventListener('beforeunload', handleBeforeUnload);
         };
-    }, [
-        playlist,
-        allTracks,
-        persistPlaybackProgressNow,
-        syncMasterTimelineWithHostPosition,
-    ]);
+    }, [persistPlaybackProgressNow, syncMasterTimelineWithHostPosition]);
 
     // [生命週期 2] 僅在尚未載入 currentTrack 且總時間軸佇列 (playlist) 有排程曲目時預載時間軸第一首；若已從快取還原則補齊封面與分析數據
     useEffect(() => {

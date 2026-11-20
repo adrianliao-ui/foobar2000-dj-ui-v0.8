@@ -196,6 +196,28 @@ let latestSpectrumBins: number[] = Array.from({ length: 64 }, () => 0);
 export const getCurrentHostPlayingPath = (): string | null =>
     currentHostPlayingPath;
 
+// 造成原錯誤的原因：當播放期間畫布佇列變動（如移除 B 使佇列由 A-B-C-D 變為 A-C-D）時，SYNC_PLAYLIST 因正在播放中而未立即清空重建宿主「DJ Workflow Set」，
+// 導致宿主回傳的 playlistRowIndex 仍為舊清單索引（如 C 的舊索引 2 在新佇列對應到 D），使對時邏輯誤將 C 當成 D。
+// 本次修改的目的：提供檢查宿主「DJ Workflow Set」簽章是否與最新佇列一致的輔助函式，不一致時忽略舊列索引，改以真實音訊路徑精準匹配曲目。
+export const isHostDjPlaylistInSyncWithQueue = (): boolean => {
+    const validPaths = latestOrderedQueuePaths.filter(
+        (p) =>
+            Boolean(p) &&
+            !p.startsWith('foobar://') &&
+            !p.startsWith('C:\\Music\\DJ_Set\\') &&
+            !p.startsWith('local-file-')
+    );
+    if (validPaths.length === 0) return false;
+    const targetSignature = validPaths
+        .map((p) => normalizeAudioPathForMatch(p))
+        .join('||');
+    return (
+        isCurrentTrackBoundToSyncedDjPlaylist &&
+        lastSyncedQueueSignature === targetSignature &&
+        djPlaylistRowCount === validPaths.length
+    );
+};
+
 export const appendBridgeLog = (
     direction: 'CLIENT_TO_HOST' | 'HOST_TO_CLIENT',
     type: string,
@@ -2327,6 +2349,20 @@ export const sendCommandToHost = (
         appendBridgeLog('CLIENT_TO_HOST', action, payload);
     }
 
+    // 造成原錯誤的原因：在 window.fb2k 實機模式下，sendCommandToHost 會進入非同步 IIFE 才更新 latestOrderedQueuePaths，
+    // 晚於同步執行的 reconcileTimelineOnQueueChange，導致移除曲目瞬間 isHostDjPlaylistInSyncWithQueue() 仍誤判為 true。
+    // 本次修改的目的：在收到 SYNC_PLAYLIST 時同步立即更新 latestOrderedQueuePaths，確保在宿主清單實際完成重寫前不會誤信舊的 playlistRowIndex。
+    if (action === 'SYNC_PLAYLIST') {
+        const syncQueue = payload.queue as
+            | Array<{ trackId: string; path: string }>
+            | undefined;
+        if (Array.isArray(syncQueue)) {
+            latestOrderedQueuePaths = syncQueue
+                .map((q) => q.path)
+                .filter(Boolean);
+        }
+    }
+
     if (fb.isAvailable() || window.fb2k) {
         void (async () => {
             try {
@@ -2507,19 +2543,8 @@ export const sendCommandToHost = (
                         });
                     }
                 } else if (action === 'SYNC_PLAYLIST') {
-                    // [修復問題 3：當畫布佇列 (flatQueue) 初始化或變動時，即時更新 latestOrderedQueuePaths 並同步至「DJ Workflow Set」]
-                    // 造成錯誤的原因：先前畫布節點變動時從未自動呼叫 SYNC_PLAYLIST，導致「DJ Workflow Set」保留舊工作階段殘留曲目且順序與 flatQueue 不符。
-                    // 修改的目的：隨時保持 latestOrderedQueuePaths 為最新佇列順序；若目前未在播放中則立即清空並重寫「DJ Workflow Set」，若正在播放則於切歌或啟動播放時無縫同步。
-                    const queue = payload.queue as
-                        | Array<{ trackId: string; path: string }>
-                        | undefined;
-                    if (Array.isArray(queue)) {
-                        latestOrderedQueuePaths = queue
-                            .map((q) => q.path)
-                            .filter(Boolean);
-                        if (!currentHostPlayingPath && window.fb2k?.invoke) {
-                            await syncOrderedQueueToDjPlaylistOnHost();
-                        }
+                    if (!currentHostPlayingPath && window.fb2k?.invoke) {
+                        await syncOrderedQueueToDjPlaylistOnHost();
                     }
                 }
             } catch (err) {

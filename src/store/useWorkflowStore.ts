@@ -619,7 +619,18 @@ const syncTimelineAndFoobarAfterQueueChange = (
                 commitPersistence: true,
                 sendHostSeek: false,
             });
+        return;
     }
+
+    // 造成原錯誤的原因：當佇列非空且因操作（抽離曲目、刪除節點/連線、排序、修改 Cue/轉場時長）使總時間軸曲目或長度改變時，未同步重算當前播放中曲目的新時間軸座標，導致 seekhead 留在舊秒數並跳到錯誤曲目上。
+    // 本次修改的目的：佇列變動後立即呼叫 reconcileTimelineOnQueueChange 將 seekhead 與 currentQueueOrder 錨定跟隨當前播放曲目的新位置。
+    const allLib =
+        libraryTracks.length > 0
+            ? libraryTracks
+            : usePlaylistStore.getState().allTracks;
+    usePlayerStore
+        .getState()
+        .reconcileTimelineOnQueueChange(prevQueue, nextQueue, allLib);
 };
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
@@ -1000,6 +1011,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             reconcileResult.nodes,
             reconcileResult.edges
         );
+        const prevQueue = get().playlist;
         const topoResult = buildFlatPlayQueue(reconcileResult.nodes, syncedEdges);
 
         set({
@@ -1013,11 +1025,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(reconcileResult.nodes, syncedEdges);
-        bridgeApi.syncPlaylistToFoobar(
-            topoResult.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            get().libraryTracks
         );
     },
 
@@ -1083,6 +1094,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             reconcileResult.nodes,
             reconcileResult.edges
         );
+        const prevQueue = get().playlist;
         const topoResult = buildFlatPlayQueue(reconcileResult.nodes, syncedEdges);
 
         set({
@@ -1096,18 +1108,23 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(reconcileResult.nodes, syncedEdges);
-        bridgeApi.syncPlaylistToFoobar(
-            topoResult.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            get().libraryTracks
         );
 
         return true;
     },
 
     deleteEdgeById: (edgeId) => {
-        const { nodes, edges, activeEdgeId } = get();
+        const {
+            nodes,
+            edges,
+            activeEdgeId,
+            playlist: prevQueue,
+            libraryTracks,
+        } = get();
         const nextEdges = edges.filter((e) => e.id !== edgeId);
         const topoResult = buildFlatPlayQueue(nodes, nextEdges);
 
@@ -1122,11 +1139,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nodes, nextEdges);
-        bridgeApi.syncPlaylistToFoobar(
-            topoResult.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            libraryTracks
         );
     },
 
@@ -1388,6 +1404,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             };
         });
 
+        const prevQueue = get().playlist;
         const syncedEdges = refreshEdgesAnalysis(nextNodes, edges);
         const topoResult = buildFlatPlayQueue(nextNodes, syncedEdges);
 
@@ -1402,11 +1419,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nextNodes, syncedEdges);
-        bridgeApi.syncPlaylistToFoobar(
-            topoResult.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            get().libraryTracks
         );
     },
 
@@ -1476,6 +1492,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             }
         }
 
+        const prevQueue = get().playlist;
         const syncedEdges = refreshEdgesAnalysis(nextNodes, dedupedEdges);
         const topoResult = buildFlatPlayQueue(nextNodes, syncedEdges);
 
@@ -1490,18 +1507,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nextNodes, syncedEdges);
-        bridgeApi.syncPlaylistToFoobar(
-            topoResult.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            get().libraryTracks
         );
     },
 
     // 造成原錯誤的原因：先前 updateTrackCuePointsInWorkflow 僅接收 (trackId, cuePoints)，會遍歷畫布所有節點一併覆寫相同 trackId 的 cuePoints，導致無法在不同卡片針對同一首曲目設定不同的 Mix-In/Out 與 Loop。
     // 本次修改的目的：新增 nodeId 參數，僅更新指定卡片節點 (nodeId) 內該首曲目的 cuePoints，實現同曲目跨卡片獨立段落與循環編排。
     updateTrackCuePointsInWorkflow: (nodeId, trackId, cuePoints) => {
-        const { nodes, edges } = get();
+        const { nodes, edges, playlist: prevQueue, libraryTracks } = get();
 
         const nextNodes = nodes.map((node) => {
             if (node.id !== nodeId) return node;
@@ -1534,6 +1550,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nextNodes, edges);
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            libraryTracks
+        );
     },
 
     updateTrackComputedMetaInWorkflow: (trackId, path, patch) => {
@@ -1642,6 +1663,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
         if (!libChanged && !nodesChanged) return;
 
+        const prevQueue = get().playlist;
         const syncedEdges = nodesChanged
             ? refreshEdgesAnalysis(nextNodes, edges)
             : edges;
@@ -1666,12 +1688,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
         if (nodesChanged) {
             persistAutoSave(nextNodes, syncedEdges);
+            syncTimelineAndFoobarAfterQueueChange(
+                prevQueue,
+                topoResult.flatQueue,
+                libChanged ? nextLibraryTracks : libraryTracks
+            );
         }
     },
 
     // 1.2 更新卡片內曲目往下一首的過渡模式設定
     updateTrackInternalTransitionInWorkflow: (nodeId, trackId, transition) => {
-        const { nodes, edges } = get();
+        const { nodes, edges, playlist: prevQueue, libraryTracks } = get();
 
         const nextNodes = nodes.map((node) => {
             if (node.id !== nodeId) return node;
@@ -1698,10 +1725,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nextNodes, edges);
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            libraryTracks
+        );
     },
 
     updateEdgeTransition: (edgeId, transition) => {
-        const { nodes, edges } = get();
+        const { nodes, edges, playlist: prevQueue, libraryTracks } = get();
         const nextEdges = edges.map((e) => {
             if (e.id === edgeId) {
                 const analysis = e.data?.analysis;
@@ -1731,6 +1763,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         });
 
         persistAutoSave(nodes, nextEdges);
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            topoResult.flatQueue,
+            libraryTracks
+        );
     },
 
     exportProjectData: () => {
@@ -1975,6 +2012,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             };
         });
 
+        const prevQueue = get().playlist;
         const updatedTopo = buildFlatPlayQueue(layoutedNodes, edges);
 
         set({
@@ -1988,12 +2026,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
         persistAutoSave(layoutedNodes, edges);
         // 造成原錯誤的原因：autoLayoutNodes 重新計算 updatedTopo.flatQueue 後未同步更新宿主的 latestOrderedQueuePaths，若佈局調整改變了未連線節點之拓撲順序會導致宿主佇列順序不一致。
-        // 本次修改的目的：排版後同步將最新 flatQueue 順序通知宿主。
-        bridgeApi.syncPlaylistToFoobar(
-            updatedTopo.flatQueue.map((item) => ({
-                trackId: item.trackId,
-                path: item.path,
-            }))
+        // 本次修改的目的：排版後同步將最新 flatQueue 順序通知宿主並錨定 seekhead 位置。
+        syncTimelineAndFoobarAfterQueueChange(
+            prevQueue,
+            updatedTopo.flatQueue,
+            get().libraryTracks
         );
     },
 

@@ -11,8 +11,10 @@ import {
     bridgeApi,
     extractFilenameStemForMatch,
     fetchSingleTrackRealCover,
+    getCurrentHostPlayingPath,
     getDetectedHostBufferSec,
     isFoobarWebView,
+    isHostDjPlaylistInSyncWithQueue,
     normalizeAudioPathForMatch,
     sendCommandToHost,
 } from '../api/mockBridge';
@@ -52,6 +54,8 @@ let activeSilenceEofTarget: {
 let silenceGapWakeTimer: ReturnType<typeof setTimeout> | null = null;
 let latestCachedFlatQueue: FlatPlayQueueItem[] = [];
 let latestCachedLibraryTracks: Track[] = [];
+// 記錄佇列重新錨定版本號，防止非同步飛行中的宿主對時快照在佇列變動後持舊佇列覆寫時間軸
+let queueReconcileEpoch = 0;
 
 const clearSilenceGapWakeTimer = (): void => {
     if (silenceGapWakeTimer !== null) {
@@ -213,6 +217,11 @@ interface PlayerActions {
     ) => void;
     persistPlaybackProgressNow: () => void;
     resetTimelinePosition: () => void;
+    reconcileTimelineOnQueueChange: (
+        prevQueue: FlatPlayQueueItem[],
+        nextQueue: FlatPlayQueueItem[],
+        libraryTracks?: Track[]
+    ) => void;
     syncMasterTimelineWithHostPosition: (
         flatQueue: FlatPlayQueueItem[],
         libraryTracks: Track[]
@@ -414,15 +423,26 @@ const findMatchingQueueItemFromHost = (
 
     const normPaths = new Set<string>();
     const fileStems = new Set<string>();
+    // 造成原錯誤的原因：在 foo_ui_webview2 實機中，CUE / 多曲目同檔的 Track.path 與 getPosition().path 不含 |subsong:N 後綴（僅 Track.handle 含有 |subsong:N）；
+    // 若將無後綴的 path 與有後綴的 handle 一併放入 normPaths 及 extractFilenameStemForMatch（會剝除 |subsong:），同張 CUE 的 A、B、C、D 會產生相同檔名 stem 碰撞。
+    // 本次修改的目的：當 hostInfo.handle 明確帶有 |subsong: 後綴時，規範化路徑僅採用含 |subsong: 的完整路徑，且對 |subsong: 曲目禁用無後綴同檔名 stem 模糊匹配。
+    const normHandle = normalizeAudioPathForMatch(hostInfo.handle);
+    const hasExplicitSubsongHandle = normHandle.includes('|subsong:');
     for (const candidate of [
+        hostInfo.handle,
         hostInfo.absolutePath,
         hostInfo.path,
-        hostInfo.handle,
     ]) {
         const np = normalizeAudioPathForMatch(candidate);
-        if (np) normPaths.add(np);
-        const stem = extractFilenameStemForMatch(candidate);
-        if (stem) fileStems.add(stem);
+        if (np) {
+            if (!hasExplicitSubsongHandle || np.includes('|subsong:')) {
+                normPaths.add(np);
+            }
+        }
+        if (!hasExplicitSubsongHandle) {
+            const stem = extractFilenameStemForMatch(candidate);
+            if (stem) fileStems.add(stem);
+        }
     }
 
     const cleanTitle = (hostInfo.title ?? '').trim().toLowerCase();
@@ -432,7 +452,10 @@ const findMatchingQueueItemFromHost = (
         const itemNorm = normalizeAudioPathForMatch(item.path);
         if (!itemNorm) return false;
         if (normPaths.has(itemNorm)) return true;
+        const itemIsSubsong = itemNorm.includes('|subsong:');
         for (const np of normPaths) {
+            const npIsSubsong = np.includes('|subsong:');
+            if (itemIsSubsong !== npIsSubsong) continue;
             if (itemNorm.endsWith(np) || np.endsWith(itemNorm)) {
                 return true;
             }
@@ -441,8 +464,11 @@ const findMatchingQueueItemFromHost = (
     };
 
     const matchesByStemOrTitle = (item: FlatPlayQueueItem): boolean => {
-        const itemStem = extractFilenameStemForMatch(item.path);
-        if (itemStem && fileStems.has(itemStem)) return true;
+        const itemNorm = normalizeAudioPathForMatch(item.path);
+        if (!itemNorm.includes('|subsong:')) {
+            const itemStem = extractFilenameStemForMatch(item.path);
+            if (itemStem && fileStems.has(itemStem)) return true;
+        }
         if (cleanTitle && item.title.trim().toLowerCase() === cleanTitle) {
             return true;
         }
@@ -453,8 +479,14 @@ const findMatchingQueueItemFromHost = (
         (item) => item.order === currentQueueOrder
     );
 
-    // 1. 若宿主提供了明確的播放清單列索引，且該列索引對應的佇列項目路徑吻合，直接採用該區段
+    // 造成原錯誤的原因：播放中從畫布抽離或刪除曲目（如 A-B-[C]-D 移除 B 變成 A-[C]-D）時，為避免中斷音訊，宿主「DJ Workflow Set」實體清單不會在播放中途清空重寫；
+    // 此時宿主回報 C 的舊 playlistRowIndex = 2 在新 flatQueue 中剛好對應到 D (index 2)，若直接採信列索引或僅用 Title 比對就會把正在播的 C 誤判為 D。
+    // 本次修改的目的：僅在宿主實體播放清單與當前佇列完全一致 (isHostDjPlaylistInSyncWithQueue) 時才採信 playlistRowIndex。
+    const canTrustPlaylistRowIndex = isHostDjPlaylistInSyncWithQueue();
+
+    // 1. 若宿主提供了明確的播放清單列索引，且宿主清單與當前佇列同步、路徑吻合，直接採用該區段
     if (
+        canTrustPlaylistRowIndex &&
         typeof hostInfo.playlistRowIndex === 'number' &&
         hostInfo.playlistRowIndex >= 0 &&
         hostInfo.playlistRowIndex < flatQueue.length
@@ -524,8 +556,9 @@ const findMatchingQueueItemFromHost = (
         return null;
     }
 
-    // 5. 當宿主完全未提供路徑或曲名、僅提供播放清單列索引時才使用列索引
+    // 5. 當宿主完全未提供路徑或曲名、僅提供播放清單列索引且清單同步時才使用列索引
     if (
+        canTrustPlaylistRowIndex &&
         typeof hostInfo.playlistRowIndex === 'number' &&
         hostInfo.playlistRowIndex >= 0 &&
         hostInfo.playlistRowIndex < flatQueue.length
@@ -2057,7 +2090,76 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         latestCachedLibraryTracks = libraryTracks;
 
         const totalDuration = flatQueue[flatQueue.length - 1].timelineEndSec;
-        const nextGlobalTime = masterTimeSeconds + deltaSeconds;
+
+        // 造成原錯誤的原因：當佇列在播放中發生變動（例如 A-B-[C]-D 抽離 B 變成 A-[C]-D）時，若舊的 masterTimeSeconds 因時間軸縮短而落入後方曲目 D 的區段，
+        // advancePlaybackTick 直接以 masterTimeSeconds + deltaSeconds 解析出 seekTarget = D，進而判定 isTrackTransition = true 並發送 cueOrPlayTrack(D, 0s) 觸發切歌且讓 seekhead 先跳至 D 中間再跳回 D 開頭。
+        // 本次修改的目的：在每次 tick 推算前，先驗證當前播放曲目 (currentTrack) 在 flatQueue 中的實際區段；若非處於 Silence 區間且 masterTimeSeconds 或 currentQueueOrder 與當前播放曲目區段失步，立即以單曲當前進度 (trackTimeSeconds) 自癒對齊回該曲目區段。
+        let baseMasterSec = masterTimeSeconds;
+        let effectiveCurrentQueueOrder = currentQueueOrder;
+
+        if (!wasInSilenceGap && (currentTrack || lastTimelineTrackId)) {
+            const activeTrackId = currentTrack?.id ?? lastTimelineTrackId ?? '';
+            const activeNormPath = normalizeAudioPathForMatch(
+                currentTrack?.path || getCurrentHostPlayingPath()
+            );
+            const itemAtOrder = flatQueue.find(
+                (item) => item.order === currentQueueOrder
+            );
+            const orderMatchesActiveTrack =
+                Boolean(itemAtOrder) &&
+                ((Boolean(activeTrackId) &&
+                    itemAtOrder!.trackId === activeTrackId) ||
+                    (Boolean(activeNormPath) &&
+                        normalizeAudioPathForMatch(itemAtOrder!.path) ===
+                            activeNormPath));
+
+            const activeQueueItem = orderMatchesActiveTrack
+                ? itemAtOrder
+                : (activeTrackId
+                      ? flatQueue.find((item) => item.trackId === activeTrackId)
+                      : undefined) ??
+                  (activeNormPath
+                      ? flatQueue.find(
+                            (item) =>
+                                normalizeAudioPathForMatch(item.path) ===
+                                activeNormPath
+                        )
+                      : undefined);
+
+            if (activeQueueItem) {
+                const isOutsideActiveItemBounds =
+                    baseMasterSec < activeQueueItem.timelineStartSec - 0.05 ||
+                    baseMasterSec > activeQueueItem.timelineEndSec + 0.05;
+                if (
+                    activeQueueItem.order !== effectiveCurrentQueueOrder ||
+                    isOutsideActiveItemBounds
+                ) {
+                    const mixIn = activeQueueItem.cuePoints?.mixIn ?? 0;
+                    const mixOut =
+                        activeQueueItem.cuePoints?.mixOut ??
+                        activeQueueItem.duration;
+                    const clampedTrackSec = Math.max(
+                        mixIn,
+                        Math.min(mixOut, trackTimeSeconds)
+                    );
+                    const offsetFromMixIn = Math.max(
+                        0,
+                        clampedTrackSec - mixIn
+                    );
+                    baseMasterSec = Math.min(
+                        activeQueueItem.timelineEndSec,
+                        Math.max(
+                            activeQueueItem.timelineStartSec,
+                            activeQueueItem.timelineStartSec + offsetFromMixIn
+                        )
+                    );
+                    effectiveCurrentQueueOrder = activeQueueItem.order;
+                    lastTimelineTrackId = activeQueueItem.trackId;
+                }
+            }
+        }
+
+        const nextGlobalTime = baseMasterSec + deltaSeconds;
 
         if (nextGlobalTime >= totalDuration) {
             wasInSilenceGap = false;
@@ -2204,16 +2306,16 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
             currentTrack
         );
 
-        // 使用 lastTimelineTrackId 與 currentQueueOrder 判斷時間軸是否跨入下一首曲目
+        // 使用 lastTimelineTrackId 與 effectiveCurrentQueueOrder 判斷時間軸是否跨入下一首曲目
         const isTrackTransition =
             Boolean(targetTrack) &&
             (targetTrack?.id !== lastTimelineTrackId ||
-                seekTarget.queueOrder !== currentQueueOrder ||
+                seekTarget.queueOrder !== effectiveCurrentQueueOrder ||
                 exitedSilenceGap);
         const isLoopRewind =
             Boolean(targetTrack) &&
             !exitedSilenceGap &&
-            seekTarget.queueOrder === currentQueueOrder &&
+            seekTarget.queueOrder === effectiveCurrentQueueOrder &&
             trackTimeSeconds - seekTarget.trackOffsetSeconds > 1.5;
 
         const stopMeta = computeSilenceStopAfterCurrentMeta(
@@ -2226,10 +2328,12 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         // 1. 前一首播放至實體 EOF (mixOut >= duration - 0.15)
         // 2. 前一首過渡模式為 CUT 或 CROSSFADE（非 SILENCE，因 CUT 與未提早切出的 CROSSFADE 在宿主端皆為無縫連續預緩衝下一首）
         // 3. 下一首無設定開頭跳過 (mixIn < 0.2s)
-        // 4. 順向進入下一列 (seekTarget.queueOrder === currentQueueOrder + 1) 且非 Loop 繞回
+        // 4. 順向進入下一列 (seekTarget.queueOrder === effectiveCurrentQueueOrder + 1) 且非 Loop 繞回
         const prevQueueItem =
             isTrackTransition && !exitedSilenceGap
-                ? flatQueue.find((item) => item.order === currentQueueOrder)
+                ? flatQueue.find(
+                      (item) => item.order === effectiveCurrentQueueOrder
+                  )
                 : undefined;
         const prevMixOut = prevQueueItem
             ? (prevQueueItem.cuePoints?.mixOut ?? prevQueueItem.duration)
@@ -2242,7 +2346,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
             isTrackTransition &&
             !exitedSilenceGap &&
             Boolean(prevQueueItem) &&
-            seekTarget.queueOrder === currentQueueOrder + 1 &&
+            seekTarget.queueOrder === effectiveCurrentQueueOrder + 1 &&
             prevMixOut >= prevQueueItem!.duration - 0.15 &&
             prevTransitionType !== 'SILENCE' &&
             targetMixIn < 0.2 &&
@@ -2442,6 +2546,260 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
         savePlayerSelection(get());
     },
 
+    // 造成原錯誤的原因：當播放或暫停期間因畫布操作（如抽離/刪除前方曲目、合併/拆分節點、重新連線或調整 Cue/Silence 長度）導致總時間軸曲目或長度改變時，
+    // masterTimeSeconds 與 currentQueueOrder 仍維持變動前的舊絕對秒數與舊順序，使得下一次 tick 直接按舊秒數推算而讓 seekhead 跳到錯誤的後方曲目上繼續移動。
+    // 本次修改的目的：當佇列變動時，以當前播放曲目與單曲內部進度 (trackTimeSeconds) 為錨點，重新映射並對齊該曲目在新時間軸上的 masterTimeSeconds 與 currentQueueOrder，不中斷宿主音訊播放。
+    reconcileTimelineOnQueueChange: (
+        prevQueue,
+        nextQueue,
+        libraryTracks = []
+    ) => {
+        if (nextQueue.length === 0) return;
+
+        const state = get();
+        latestCachedFlatQueue = nextQueue;
+        if (libraryTracks.length > 0) {
+            latestCachedLibraryTracks = libraryTracks;
+        }
+
+        const totalDuration = nextQueue[nextQueue.length - 1].timelineEndSec;
+        const currentTrack = state.currentTrack;
+
+        if (!currentTrack && !lastTimelineTrackId && prevQueue.length === 0) {
+            return;
+        }
+
+        // 標記佇列重新錨定時間戳記與版本號，防止飛行中的舊宿主對時快照覆寫剛對齊好的新座標
+        lastUserSeekOrToggleAtMs = Date.now();
+        queueReconcileEpoch += 1;
+
+        const activeTrackId = currentTrack?.id ?? lastTimelineTrackId ?? '';
+        const activeNormPath = normalizeAudioPathForMatch(
+            currentTrack?.path || getCurrentHostPlayingPath()
+        );
+
+        // 造成原錯誤的原因：先前優先以 prevQueue.find(i => i.order === state.currentQueueOrder) 決定目標曲目，
+        // 當使用者分兩步編輯畫布（例如先斷開/刪除 B 再重連 A->C，或 currentQueueOrder 尚未同步）時，按舊 order 查到的可能不是當前實際播放的 currentTrack；
+        // 且當 !matchedNextItem 時直接呼叫 seekMasterTimeline(sendHostSeek: true) 會強制把正在播放的 C 切歌到其他曲目。
+        // 本次修改的目的：優先確認 order 對應項目是否即為 currentTrack，否則以 currentTrack.id / 音訊路徑鎖定正在播放的曲目；若播放中該曲目暫不在新佇列中，亦絕不強制發送切歌指令。
+        const itemAtOrder = prevQueue.find(
+            (item) => item.order === state.currentQueueOrder
+        );
+        const orderMatchesCurrent =
+            Boolean(itemAtOrder) &&
+            ((Boolean(activeTrackId) &&
+                itemAtOrder!.trackId === activeTrackId) ||
+                (Boolean(activeNormPath) &&
+                    normalizeAudioPathForMatch(itemAtOrder!.path) ===
+                        activeNormPath));
+
+        const prevItem = orderMatchesCurrent
+            ? itemAtOrder
+            : (activeTrackId
+                  ? prevQueue.find((item) => item.trackId === activeTrackId)
+                  : undefined) ??
+              (activeNormPath
+                  ? prevQueue.find(
+                        (item) =>
+                            normalizeAudioPathForMatch(item.path) ===
+                            activeNormPath
+                    )
+                  : undefined) ??
+              itemAtOrder;
+
+        const targetTrackId = activeTrackId || (prevItem?.trackId ?? '');
+        const targetNormPath =
+            activeNormPath || normalizeAudioPathForMatch(prevItem?.path);
+
+        let matchedNextItem: FlatPlayQueueItem | undefined;
+        if (prevItem) {
+            matchedNextItem = nextQueue.find(
+                (item) =>
+                    item.sourceNodeId === prevItem.sourceNodeId &&
+                    item.trackId === prevItem.trackId
+            );
+        }
+        if (!matchedNextItem && targetTrackId) {
+            matchedNextItem = nextQueue.find(
+                (item) => item.trackId === targetTrackId
+            );
+        }
+        if (!matchedNextItem && targetNormPath) {
+            matchedNextItem = nextQueue.find(
+                (item) =>
+                    normalizeAudioPathForMatch(item.path) === targetNormPath
+            );
+        }
+
+        // 若當前曲目不在新佇列中：播放中絕不呼叫 seekMasterTimeline 強制切歌（避免兩步驟刪節點/重連期間誤切到 D），僅更新總長度；非播放狀態才歸位至鄰近曲目起點
+        if (!matchedNextItem) {
+            if (state.isPlaying) {
+                set({
+                    masterTotalDuration: totalDuration,
+                    masterTimeSeconds: Number(
+                        Math.min(
+                            totalDuration,
+                            state.masterTimeSeconds
+                        ).toFixed(2)
+                    ),
+                });
+                return;
+            }
+            const fallbackIdx = Math.max(
+                0,
+                Math.min(nextQueue.length - 1, state.currentQueueOrder - 1)
+            );
+            const fallbackItem = nextQueue[fallbackIdx];
+            get().seekMasterTimeline(
+                fallbackItem.timelineStartSec,
+                nextQueue,
+                libraryTracks,
+                {
+                    commitPersistence: true,
+                    sendHostSeek: false,
+                }
+            );
+            return;
+        }
+
+        const matchedIdx = nextQueue.findIndex(
+            (item) => item.order === matchedNextItem!.order
+        );
+        const followingNextItem =
+            matchedIdx !== -1 && matchedIdx + 1 < nextQueue.length
+                ? nextQueue[matchedIdx + 1]
+                : null;
+
+        // 情況 1：變動前正處於該曲目尾端的 SILENCE 靜音過渡區間
+        if (wasInSilenceGap && prevItem) {
+            const elapsedSilence = Math.max(
+                0,
+                state.masterTimeSeconds - prevItem.timelineEndSec
+            );
+            const hasSilenceInNewQueue =
+                matchedNextItem.transitionToNext.type === 'SILENCE' &&
+                (matchedNextItem.transitionToNext.duration ?? 0) > 0 &&
+                Boolean(followingNextItem) &&
+                followingNextItem!.timelineStartSec >
+                    matchedNextItem.timelineEndSec;
+
+            if (hasSilenceInNewQueue && followingNextItem) {
+                const newGlobalSec = Math.min(
+                    followingNextItem.timelineStartSec - 0.02,
+                    matchedNextItem.timelineEndSec + elapsedSilence
+                );
+                const remainSec = Math.max(
+                    0,
+                    followingNextItem.timelineStartSec - newGlobalSec
+                );
+                markMasterClockUpdated();
+                set({
+                    currentQueueOrder: matchedNextItem.order,
+                    masterTimeSeconds: Number(newGlobalSec.toFixed(2)),
+                    masterTotalDuration: totalDuration,
+                    activeCueLabel: `Silence 靜音過渡中 (${remainSec.toFixed(1)}s)`,
+                });
+                if (state.isPlaying) {
+                    backgroundAnchorTimestampMs = Date.now();
+                    backgroundAnchorMasterSec = newGlobalSec;
+                }
+                savePlayerSelection(get());
+                return;
+            }
+            wasInSilenceGap = false;
+            clearSilenceGapWakeTimer();
+        }
+
+        // 情況 2：一般曲目播放或暫停狀態，以該曲目當前播放秒數 (trackTimeSeconds) 錨定新時間軸座標
+        const mixIn = matchedNextItem.cuePoints?.mixIn ?? 0;
+        const mixOut =
+            matchedNextItem.cuePoints?.mixOut ?? matchedNextItem.duration;
+        const singleSpan = Math.max(0.5, mixOut - mixIn);
+        const loopCount = Math.max(
+            1,
+            Math.floor(matchedNextItem.cuePoints?.loopCount ?? 1)
+        );
+
+        let completedLoops = 0;
+        if (prevItem && loopCount > 1) {
+            const prevMixIn = prevItem.cuePoints?.mixIn ?? 0;
+            const prevMixOut = prevItem.cuePoints?.mixOut ?? prevItem.duration;
+            const prevSingleSpan = Math.max(0.5, prevMixOut - prevMixIn);
+            const prevElapsedInItem = Math.max(
+                0,
+                state.masterTimeSeconds - prevItem.timelineStartSec
+            );
+            completedLoops = Math.min(
+                loopCount - 1,
+                Math.max(0, Math.floor(prevElapsedInItem / prevSingleSpan))
+            );
+        }
+
+        const clampedTrackSec = Math.max(
+            mixIn,
+            Math.min(mixOut, state.trackTimeSeconds)
+        );
+        const offsetFromMixIn = Math.max(0, clampedTrackSec - mixIn);
+        const newGlobalSec = Math.min(
+            matchedNextItem.timelineEndSec,
+            Math.max(
+                matchedNextItem.timelineStartSec,
+                matchedNextItem.timelineStartSec +
+                    completedLoops * singleSpan +
+                    offsetFromMixIn
+            )
+        );
+
+        const seekAtNewGlobal = resolveMasterTimelineSeek(
+            nextQueue,
+            newGlobalSec
+        );
+        const stopMeta = computeSilenceStopAfterCurrentMeta(
+            nextQueue,
+            matchedNextItem.order
+        );
+        activeSilenceEofTarget = stopMeta.eofTarget;
+        if (
+            state.isPlaying &&
+            !state.isPreviewPlaying &&
+            lastAppliedStopAfterCurrent !== stopMeta.shouldStop
+        ) {
+            lastAppliedStopAfterCurrent = stopMeta.shouldStop;
+            bridgeApi.setStopAfterCurrent(stopMeta.shouldStop);
+        }
+
+        const resolvedTrack = resolveTrackFromQueueOrLibrary(
+            matchedNextItem.trackId,
+            matchedNextItem.order,
+            nextQueue,
+            libraryTracks,
+            state.currentTrack
+        );
+        lastTimelineTrackId = resolvedTrack?.id ?? matchedNextItem.trackId;
+        nativeGaplessFallbackSentForOrder = null;
+
+        markMasterClockUpdated();
+        set({
+            currentTrack: resolvedTrack ?? state.currentTrack,
+            currentQueueOrder: matchedNextItem.order,
+            trackTimeSeconds: Number(clampedTrackSec.toFixed(2)),
+            masterTimeSeconds: Number(newGlobalSec.toFixed(2)),
+            masterTotalDuration: totalDuration,
+            activeCueLabel:
+                seekAtNewGlobal?.transitionLabel ??
+                evaluateActiveCueLabel(
+                    resolvedTrack ?? state.currentTrack,
+                    clampedTrackSec
+                ),
+        });
+
+        if (state.isPlaying) {
+            backgroundAnchorTimestampMs = Date.now();
+            backgroundAnchorMasterSec = newGlobalSec;
+        }
+        savePlayerSelection(get());
+    },
+
     /**
      * [修復最小化後開啟視窗時 seekhead 回溯到前一首歌尾部、專輯封面與曲目資訊停留在前一首的問題]
      * [修復問題 3 (Silence 情況 A)：當前曲目有設置 mix-out 點時，播放至該點就會停住 (Pause 變回 Play) 且 seekhead 不再前進的問題]
@@ -2561,10 +2919,11 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
             }
         }
 
-        const totalDuration = flatQueue[flatQueue.length - 1].timelineEndSec;
+        let totalDuration = flatQueue[flatQueue.length - 1].timelineEndSec;
         const wasJustRestoredFromHidden =
             lastVisibilityRestoreAtMs > 0 &&
             Date.now() - lastVisibilityRestoreAtMs < 1500;
+        const syncEpochAtStart = queueReconcileEpoch;
         isResyncingFromHost = true;
 
         const runSync = async () => {
@@ -2572,12 +2931,23 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
                 const snap = await bridgeApi.queryHostPlaybackSnapshot();
                 lastVisibilityRestoreAtMs = 0;
 
-                // 再次檢查：若在等待 IPC 回傳期間使用者執行了手動跳轉、切換播放/暫停或剛進入了 Silence 靜音區間，直接放棄此次舊快照
+                // 造成原錯誤的原因：當 2 秒定時輪詢正在等待 queryHostPlaybackSnapshot() IPC 回傳期間，若使用者剛好抽離或刪除佇列曲目，
+                // 閉包內的 flatQueue 已過期且會與 reconcileTimelineOnQueueChange 衝突。
+                // 本次修改的目的：若等待 IPC 期間發生過佇列變更 (queueReconcileEpoch 改變) 或手動操作，直接捨棄此次舊快照，並始終讀取最新的 latestCachedFlatQueue。
                 if (
+                    syncEpochAtStart !== queueReconcileEpoch ||
                     Date.now() - lastUserSeekOrToggleAtMs < 850 ||
                     wasInSilenceGap
                 ) {
                     return;
+                }
+                if (latestCachedFlatQueue.length > 0) {
+                    flatQueue = latestCachedFlatQueue;
+                    totalDuration =
+                        flatQueue[flatQueue.length - 1].timelineEndSec;
+                }
+                if (latestCachedLibraryTracks.length > 0) {
+                    libraryTracks = latestCachedLibraryTracks;
                 }
 
                 // 若宿主因 Stop After Current（或 Silence 期間被 pauseForSilenceGap 暫停）處於 stopped / paused，判斷靜音秒數是否已走完：
@@ -2743,10 +3113,29 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
                         // 本次修改的目的：當 `matchedItem.order < state.currentQueueOrder` 時：
                         // 1. 若超過緩衝寬限期、或宿主在前一首的秒數居然掉回開頭 (`snap.playbackTime < 1.5`)，立即補發 `cueOrPlayTrack` 強制切入當前排程曲目；
                         // 2. 若尚在緩衝寬限期內（宿主正播完前一首尾端最後零點幾秒），直接 `return` 忽略此次過時快照，絕不把已進入下一首的時間軸拉回前一首！
+                        // 造成原錯誤的原因：當播放 C (原 order=3) 期間移除前方的 B，使 C 在新佇列的 order 變為 2，若此時 currentQueueOrder 尚未更新仍為 3，
+                        // matchedItem.order (2) < state.currentQueueOrder (3) 會誤觸下方「原生無縫跨曲逾時備援」，把排在 order=3 的 D 當成 expectedNowItem 發送 cueOrPlayTrack(D, 0s) 強制切歌到 D 開頭。
+                        // 本次修改的目的：若 matchedItem 本身就是當前正在播放的 currentTrack，代表只是佇列前方曲目減少導致 order 往前順移，直接跳過備援切歌並往下對齊 C 的新座標。
+                        const isMatchedSameAsCurrentTrack =
+                            Boolean(state.currentTrack) &&
+                            (matchedItem.trackId === state.currentTrack!.id ||
+                                (Boolean(
+                                    normalizeAudioPathForMatch(
+                                        matchedItem.path
+                                    )
+                                ) &&
+                                    normalizeAudioPathForMatch(
+                                        matchedItem.path
+                                    ) ===
+                                        normalizeAudioPathForMatch(
+                                            state.currentTrack!.path
+                                        )));
+
                         if (
                             state.isPlaying &&
                             snap.isPlaying &&
-                            matchedItem.order < state.currentQueueOrder
+                            matchedItem.order < state.currentQueueOrder &&
+                            !isMatchedSameAsCurrentTrack
                         ) {
                             const expectedNowItem = flatQueue.find(
                                 (item) => item.order === state.currentQueueOrder
