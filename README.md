@@ -309,8 +309,13 @@ src/
    - 在 `src/api/mockBridge.ts` 中，任何呼叫 `playlist.addItems` / `playlist.addLocations` 的操作都會觸發 foobar2000 原生 `process_locations_async` 並閃現「`Processing files`」進度視窗。因此：
      1. 畫布拓撲佇列在變動時（`recomputeTopologicalQueue`）即由背景預先呼叫 `syncOrderedQueueToDjPlaylistOnHost`，並以路徑指紋 `lastSyncedDjSetSignature` 快取同步狀態。
      2. 當使用者於播放中點擊 Master 時間軸跳轉（Seek）或從暫停狀態恢復播放時，`playOrCueTrackOnFoobarHost` 命中指紋快取後**直接對既有曲目索引執行 `playTrack` / `seek`，0 次歌單重建**；即便需新增曲目亦嚴格只走 `library.addToPlaylist`（記憶體 `metadb_handle` 注入），徹底杜絕閃現「`Processing files`」視窗。
-3. **多重音軌檔（CUE / Subsong）路徑識別**：
+3. **多重音軌檔（CUE / Subsong）路徑識別與隔離比對**：
    - 對於單一音訊檔內含多個 `subsong`（如整軌 CUE 映像檔）的曲目，其唯一識別 `handle` 格式為 `<path>|subsong:<N>`。在查詢 `%length_seconds_fp%` 時（`enrichAndMapSdkTracks` 與 `queryTracksExactFloorDurations`），若 `subsong > 0` 必須優先傳入含 `|subsong:N` 的 `handle`，否則宿主會回傳整張專輯檔或第一軌的時長。
+   - 在 `usePlayerStore.findMatchingQueueItemFromHost` 比對宿主當前播放曲目時，若 `hostInfo.handle` 帶有 `|subsong:N` 後綴，嚴格僅以含 `|subsong:N` 的完整規範化路徑比對，並對 `|subsong:` 曲目禁用無後綴同檔名 `stem` 模糊比對，防止同張 CUE 映像檔內的多首曲目發生路徑碰撞。
+4. **播放中佇列動態變動之 `seekhead` 曲目錨定與非同步對時防呆**：
+   - 當播放中因抽離、刪除、合併或重排畫布節點導致總時間軸改變（例如 `A-B-[C]-D` 播放 `C` 時移除 `B` 變為 `A-[C]-D`）時，`useWorkflowStore.syncTimelineAndFoobarAfterQueueChange` 會立即同步呼叫 `usePlayerStore.reconcileTimelineOnQueueChange`，以當前實際播放曲目（`currentTrack` / 宿主播放路徑）與單曲內部進度 `trackTimeSeconds` 為錨點，重新映射該曲目在新時間軸上的 `masterTimeSeconds` 與 `currentQueueOrder`，且絕不對正在播放的曲目誤發切歌指令。
+   - `mockBridge.sendCommandToHost('SYNC_PLAYLIST')` 在進入 `window.fb2k` 非同步區塊前會**同步立即更新 `latestOrderedQueuePaths`**；配合 `isHostDjPlaylistInSyncWithQueue()`，在播放期間宿主「`DJ Workflow Set`」實體清單尚未重寫前，強制停用舊 `playlistRowIndex` 索引匹配（避免舊索引 `2` 在新佇列誤指到 `D` 曲），並跳過 `matchedItem.order < currentQueueOrder` 的原生無縫跨曲逾時備援切歌。
+   - `usePlayerStore` 透過 `queueReconcileEpoch` 版本鎖與 `advancePlaybackTick` 曲目錨點自癒檢查，自動攔截並捨棄任何跨越佇列變更時間點的飛行中 `queryHostPlaybackSnapshot` IPC 舊快照，並始終讀取最新的 `latestCachedFlatQueue`。
 
 ---
 
